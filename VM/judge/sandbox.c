@@ -1,35 +1,45 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 #include <string.h>
-#include <sys/time.h>		//rlimit
-#include <sys/resource.h>	//rlimit
+#include <pthread.h>
 #include <unistd.h>			//dup2
 #include <seccomp.h>		//seccomp
+#include <signal.h>
+#include <sys/time.h>		//rlimit
+#include <sys/resource.h>	//rlimit
+#include <sys/types.h>
+#include <sys/wait.h>
 
 #define CHILD_STACK_SIZE (128 * 1024 * 1024)
 
-typedef struct sandbox_config {
-	int stack_size;
-	int time_limit;
-	int memory_limit;
-	int case_number;
+struct sandbox_config {
+	char *exe_file;
 	char *input_path;
 	char *output_path;
 	char *error_path;
-	char *exe_file;
-} sandbox_config;
+	int time_limit;
+	int memory_limit;
+	int case_number;
+};
+typedef struct sandbox_config sandbox_config;
 
-typedef struct judge_result {
+struct sandbox_timeout_arg {
+	int timeout;
+	int cpid;
+};
+typedef struct sandbox_timeout_arg sandbox_timeout_arg;
 
-} judge_result;
+struct judge_result {
 
-typedef struct rlimit rlimit; 
+};
+typedef struct judge_result judge_result;
 
 void check_config(sandbox_config config) {
 
 }
+
+typedef struct rlimit rlimit;
 
 int set_rlimit(sandbox_config *config) {
 	int rc = -1;
@@ -156,26 +166,76 @@ int sandbox_process(sandbox_config *config) {
 	return 0;
 }
 
+void *sandbox_timeout(void *arg) {
+	sandbox_timeout_arg *timeout_arg = arg;
+	int ret;
+
+	ret = pthread_detach(pthread_self());
+	if(ret != 0){
+		//pthread_detach error
+	}
+	ret = sleep((unsigned int)timeout_arg.timeout);
+	if(ret != 0){
+		//sleep error
+	}
+	ret = kill(timeout_arg.cpid, SIGKILL);
+	if(ret == -1){
+		//kill error
+	}
+	return NULL;
+}
+
+
 int main(int argc, char *argv)
 {
-	struct  timeval start_time, end_time;
+	struct timeval start_time, end_time;
+	struct rusage child_usage;
+	sandbox_config *config;
+	int wstatus, ret;
 
-	int pid;
-	void *child_stack = malloc(CHILD_STACK_SIZE);
+	if(argc == 7){
+		//arg for judge
+		config.exe_file = argv[1];
+		config.input_path = argv[2];
+		config.output_path = argv[3];
+		config.error_path = argv[4];
+		config.time_limit = argv[5];
+		config.memory_limit = argv[6];
+	//	case_number = argv[7];
+	}
 
 	gettimeofday(&start_time, NULL);
 
-	pid_t child_pid = fork();
+	pid_t cpid = fork();
 
-	if(child_pid < 0){
-		//fork error
+	if(cpid < 0){
+//fork error
 	}
-	else if(child_pid == 0){
-		//child process
-		judge_sandbox();
+	else if(cpid == 0){
+//child process
+		sandbox_process(config);
 	}
 	else{
-		//parent process
+//parent process
+		pthread_t tid;
+		sandbox_timeout_arg timeout_arg;
+		timeout_arg.timeout = config.time_limit + 1;
+		timeout_arg.cpid = cpid;
+		pthread_create(tid, NULL, sandbox_timeout, &timeout_arg);
+
+
+		ret = waitpid(cpid, &wstatus, WUNTRACED);
+		if(ret == -1){
+			kill(cpid, SIGKILL);
+			//waitpid error
+		}
+
+		gettimeofday(&end_time, NULL);
+
+		ret = getrusage(RUSAGE_CHILDREN, &child_usage);
+		if(ret == -1){
+			//getrusage error
+		}
 	}
 	return 0;
 }
